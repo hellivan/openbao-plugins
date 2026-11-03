@@ -5,6 +5,7 @@ package aws
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"time"
@@ -172,6 +173,9 @@ func (b *backend) getFederationToken(ctx context.Context, s logical.Storage,
 	if err != nil {
 		return logical.ErrorResponse("Error generating STS keys: %s", err), awsutil.CheckAWSError(err)
 	}
+	if err := checkSTSCredentials(tokenResp.Credentials); err != nil {
+		return nil, err
+	}
 
 	// While STS credentials cannot be revoked/renewed, we will still create a lease since users are
 	// relying on a non-zero `lease_duration` in order to manage their lease lifecycles manually.
@@ -196,6 +200,16 @@ func (b *backend) getFederationToken(ctx context.Context, s logical.Storage,
 	resp.Secret.Renewable = false
 
 	return resp, nil
+}
+
+// checkSTSCredentials returns an error instead of letting a response without
+// complete credentials crash the plugin with a nil pointer dereference.
+func checkSTSCredentials(creds *ststypes.Credentials) error {
+	if creds == nil || creds.AccessKeyId == nil || creds.SecretAccessKey == nil ||
+		creds.SessionToken == nil || creds.Expiration == nil {
+		return errors.New("STS response did not contain complete credentials")
+	}
+	return nil
 }
 
 func (b *backend) assumeRole(ctx context.Context, s logical.Storage,
@@ -271,19 +285,26 @@ func (b *backend) assumeRole(ctx context.Context, s logical.Storage,
 	if err != nil {
 		return logical.ErrorResponse("Error assuming role: %s", err), awsutil.CheckAWSError(err)
 	}
+	if err := checkSTSCredentials(tokenResp.Credentials); err != nil {
+		return nil, err
+	}
 
 	// While STS credentials cannot be revoked/renewed, we will still create a lease since users are
 	// relying on a non-zero `lease_duration` in order to manage their lease lifecycles manually.
 	//
 	ttl := tokenResp.Credentials.Expiration.Sub(time.Now())
-	resp := b.Secret(secretAccessKeyType).Response(map[string]interface{}{
+	data := map[string]interface{}{
 		"access_key":     *tokenResp.Credentials.AccessKeyId,
 		"secret_key":     *tokenResp.Credentials.SecretAccessKey,
 		"security_token": *tokenResp.Credentials.SessionToken,
 		"session_token":  *tokenResp.Credentials.SessionToken,
-		"arn":            *tokenResp.AssumedRoleUser.Arn,
 		"ttl":            uint64(ttl.Seconds()),
-	}, map[string]interface{}{
+	}
+	// Some STS implementations (e.g. MinIO, RustFS) do not return AssumedRoleUser.
+	if tokenResp.AssumedRoleUser != nil && tokenResp.AssumedRoleUser.Arn != nil {
+		data["arn"] = *tokenResp.AssumedRoleUser.Arn
+	}
+	resp := b.Secret(secretAccessKeyType).Response(data, map[string]interface{}{
 		"username": roleSessionName,
 		"policy":   roleArn,
 		"is_sts":   true,
