@@ -1,0 +1,10 @@
+# Solunio build of the patched aws secrets plugin (not part of the upstream PR).
+#   make bin/openbao-plugin-secrets-aws_linux_amd64_v1 PLUGIN=secrets-aws VERSION=v0.3.2
+#   podman build --platform linux/amd64 --format oci --build-arg REVISION=$(git rev-parse --short HEAD) \
+#     -f solunio/Containerfile -t <registry>/openbao-plugin-secrets-aws:<tag> .
+FROM scratch
+ARG REVISION
+LABEL org.opencontainers.image.source=https://github.com/hellivan/openbao-plugins
+LABEL org.opencontainers.image.revision=${REVISION}
+COPY bin/openbao-plugin-secrets-aws_linux_amd64_v1 /openbao-plugin-secrets-aws
+ENTRYPOINT ["/openbao-plugin-secrets-aws"]
